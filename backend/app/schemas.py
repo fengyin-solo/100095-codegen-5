@@ -21,6 +21,22 @@ class ActionResult(BaseModel):
     entry: dict[str, Any] | None = None
 
 
+class SkippedRow(BaseModel):
+    """批量导入时被整行跳过的台账行。"""
+
+    line: int = Field(description="CSV 文件中的行号（含表头，从 1 开始）")
+    reason: str
+
+
+class WasteImportResult(BaseModel):
+    """废液台账批量导入结果：落库数量与逐行跳过原因都要对用户交代清楚。"""
+
+    scanned: int = Field(description="扫描到的数据行数（不含表头与空行）")
+    updated: int = Field(description="按废液编号对上账、已更新移交日期与处置单位的行数")
+    created: int = Field(description="台账中不存在、补登为暂存中的行数")
+    skipped: list[SkippedRow] = Field(default_factory=list, description="整行跳过的行号与原因")
+
+
 class EntryPayload(BaseModel):
     """登记或修改一条业务记录时提交的字段集合。"""
 
