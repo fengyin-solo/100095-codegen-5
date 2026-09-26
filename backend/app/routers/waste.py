@@ -1,33 +1,86 @@
-"""实验废液接口：维护废液记录，覆盖登记移交、确认处置、回单归档等动作。"""
+"""实验废液接口：维护废液记录，覆盖登记移交、确认处置、回单归档与台账导入导出。"""
 from __future__ import annotations
 
-from typing import Any
+from datetime import date
+from urllib.parse import quote
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 
-from app.schemas import ActionResult, EntryPayload, PageResult
-from app.services.waste import WasteService
+from app.schemas import ActionResult, EntryPayload, ImportResult, PageResult
+from app.services.waste import ImportFormatError, WasteService
 
 router = APIRouter(prefix="/api/waste", tags=["实验废液"])
 
 service = WasteService()
 
-LIST_FIELDS = ["废液编号", "废液类别", "产生环节", "暂存容器", "产生日期", "移交日期", "处置单位", "废液状态"]
 STATUSES = ["暂存中", "待移交", "已移交", "已处置"]
 
 
 @router.get("", response_model=PageResult[dict])
 def list_entries(
     keyword: str | None = Query(default=None, description="按废液编号检索"),
+    category: str | None = Query(default=None, description="按废液类别检索"),
     status: str | None = Query(default=None, description="暂存中、待移交、已移交、已处置"),
+    date_from: str | None = Query(default=None, description="移交日期起，YYYY-MM-DD"),
+    date_to: str | None = Query(default=None, description="移交日期止，YYYY-MM-DD"),
     page: int = 1,
     size: int = 20,
 ) -> PageResult[dict]:
-    """按废液编号与状态过滤实验废液列表；没有数据时返回空页，不报错。"""
+    """按编号、类别、状态与移交日期区间过滤实验废液列表；没有数据时返回空页，不报错。"""
     if size > 200:
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
-    items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
+    try:
+        items, total = service.list_entries(
+            keyword=keyword, category=category, status=status,
+            date_from=date_from, date_to=date_to, page=page, size=size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/export")
+def export_entries(
+    keyword: str | None = Query(default=None, description="按废液编号检索"),
+    category: str | None = Query(default=None, description="按废液类别检索"),
+    status: str | None = Query(default=None, description="暂存中、待移交、已移交、已处置"),
+    date_from: str | None = Query(default=None, description="移交日期起，YYYY-MM-DD"),
+    date_to: str | None = Query(default=None, description="移交日期止，YYYY-MM-DD"),
+) -> Response:
+    """按当前筛选条件导出移交台账 CSV；导出的文件改完后可直接再导入。"""
+    try:
+        csv_text = service.export_csv(
+            keyword=keyword, category=category, status=status,
+            date_from=date_from, date_to=date_to,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    stamp = f"{date.today():%Y%m%d}"
+    disposition = (
+        f"attachment; filename=\"waste_ledger_{stamp}.csv\"; "
+        f"filename*=UTF-8''{quote(f'废液移交台账_{stamp}.csv')}"
+    )
+    return Response(
+        content=csv_text.encode("utf-8-sig"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": disposition},
+    )
+
+
+@router.post("/import", response_model=ImportResult)
+async def import_entries(file: UploadFile) -> ImportResult:
+    """批量补登记：按废液编号对账，已存在的更新移交日期与处置单位，不存在的补成暂存中。
+
+    废液类别或产生环节为空的行整行跳过并在结果里列出行号与原因；
+    文件整体格式不合法时整份拒绝，不会留下写了一半的台账。
+    """
+    content = await file.read()
+    try:
+        result = service.import_ledger(content)
+    except ImportFormatError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ImportResult(ok=True, **result)
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -56,10 +109,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出实验废液清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "waste", "total": total, "items": items}

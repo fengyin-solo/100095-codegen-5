@@ -28,6 +28,23 @@ class EntryPayload(BaseModel):
     remark: str | None = None
 
 
+class ImportSkippedRow(BaseModel):
+    """导入时被整行跳过的记录：行号按文件实际行数（表头为第 1 行）。"""
+
+    row: int
+    reason: str
+
+
+class ImportResult(BaseModel):
+    """批量导入结果：更新与补登数量、被跳过的行明细。"""
+
+    ok: bool
+    message: str
+    created: int = 0
+    updated: int = 0
+    skipped: list[ImportSkippedRow] = Field(default_factory=list)
+
+
 
 class SampleEntry(BaseModel):
     """检测样品明细结构。"""

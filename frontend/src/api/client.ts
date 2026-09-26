@@ -3,10 +3,12 @@ const API_BASE = import.meta.env.VITE_API_BASE ?? ''
 
 export function request(path: string, init?: RequestInit): Promise<Response> {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`
-  return fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
-    ...init,
-  }).catch((error: unknown) => {
+  const headers: Record<string, string> = { ...((init?.headers as Record<string, string>) ?? {}) }
+  // 文件上传走 multipart，浏览器会自动带上 boundary，不能强行设 JSON 头
+  if (!(init?.body instanceof FormData)) {
+    headers['Content-Type'] = headers['Content-Type'] ?? 'application/json'
+  }
+  return fetch(url, { ...init, headers }).catch((error: unknown) => {
     const detail = error instanceof Error ? error.message : '请求未送达'
     throw new Error(`接口请求失败：${detail}`)
   })
